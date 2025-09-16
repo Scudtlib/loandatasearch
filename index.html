@@ -1,7 +1,23 @@
-<!doctype html><meta charset="utf-8">
+<!doctype html>
+<meta charset="utf-8">
 <title>Borrow Query</title>
-<style>label{margin-right:8px} select,button{margin:4px}</style>
-<div>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial; }
+  body { margin: 16px; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  label { display: inline-flex; align-items: center; gap: 6px; }
+  select, button { padding: 6px 10px; }
+  button { cursor: pointer; }
+  #msg { margin-top: 10px; color: #444; }
+  #result { margin-top: 14px; font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+  th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; }
+  th { background: #f5f5f5; }
+  pre { white-space: pre-wrap; word-break: break-word; background: #fafafa; border: 1px solid #eee; padding: 10px; }
+</style>
+
+<div class="row">
   <label>學院 <select id="college"></select></label>
   <label>學系 <select id="dept"></select></label>
   <label>讀者類型 <select id="reader"></select></label>
@@ -9,38 +25,108 @@
   <button id="btnUsers">查人次</button>
   <button id="btnList">清單</button>
 </div>
-<pre id="out"></pre>
+
+<div id="msg"></div>
+<div id="result"></div>
+<div id="tableWrap"></div>
+<pre id="debug" style="display:none"></pre>
+
 <script>
-const API = "https://<你的n8n域名>/webhook[-test]/borrow-stats";
+// ===== Config =====
+// 1) 建議改成你的 n8n Webhook URL，例如：
+//    const API = "https://sculib.app.n8n.cloud/webhook-test/borrow-stats";
+// 2) 也可透過網址參數覆蓋：?api=https://.../borrow-stats
+const API = new URLSearchParams(location.search).get("api") || "https://<你的n8n域名>/webhook[-test]/borrow-stats";
 
-const qs = () => {
+const el = id => document.getElementById(id);
+const selects = { college: el("college"), dept: el("dept"), reader: el("reader") };
+const msg = el("msg"), result = el("result"), tableWrap = el("tableWrap"), debug = el("debug");
+
+function setMessage(t){ msg.textContent = t || ""; }
+function setResult(t){ result.textContent = t || ""; }
+function clearTable(){ tableWrap.innerHTML = ""; }
+function showError(e){ setMessage("發生錯誤：" + e); console.error(e); }
+
+function currentParams(){
   const p = new URLSearchParams();
-  const v = id => document.getElementById(id).value;
-  if (v("college")) p.set("college", v("college"));
-  if (v("dept"))    p.set("dept", v("dept"));
-  if (v("reader"))  p.set("readerType", v("reader"));
+  const c = selects.college.value, d = selects.dept.value, r = selects.reader.value;
+  if (c) p.set("college", c);
+  if (d) p.set("dept", d);
+  if (r) p.set("readerType", r);
   return p;
-};
+}
 
-async function loadOptions() {
-  const url = `${API}?view=options`;
-  const data = await fetch(url).then(r=>r.json());
-  const fill = (id, arr) => {
-    const sel = document.getElementById(id);
-    sel.innerHTML = `<option value=""></option>` + arr.map(x=>`<option>${x}</option>`).join("");
-  };
-  fill("college", data.options.colleges);
-  fill("dept",    data.options.depts);
-  fill("reader",  data.options.readers);
+async function callAPI(params){
+  const url = API + "?" + params.toString();
+  const res = await fetch(url, { mode: "cors" });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return res.json();
 }
-async function run(view, metric) {
-  const p = qs(); p.set("view", view); if (metric) p.set("metric", metric);
-  const url = `${API}?${p.toString()}`;
-  const data = await fetch(encodeURI(url)).then(r=>r.json());
-  out.textContent = JSON.stringify(data, null, 2);
+
+function fillSelect(sel, arr){
+  const cur = sel.value;
+  const opts = ['<option value=""></option>']
+    .concat((arr || []).map(v => `<option>${v}</option>`))
+    .join("");
+  sel.innerHTML = opts;
+  // 若舊值仍存在，保留選取
+  if (cur && arr && arr.includes(cur)) sel.value = cur;
 }
-document.getElementById("btnSum").onclick   = () => run("summary","copies");
-document.getElementById("btnUsers").onclick = () => run("summary","users");
-document.getElementById("btnList").onclick  = () => run("list");
+
+async function loadOptions(cascade=true){
+  try{
+    setMessage("載入選項中…");
+    // 用目前已選的條件去拿 options 可做聯動
+    const p = currentParams(); p.set("view", "options");
+    const data = await callAPI(p);
+    fillSelect(selects.college, data?.options?.colleges || []);
+    fillSelect(selects.dept,    data?.options?.depts || []);
+    fillSelect(selects.reader,  data?.options?.readers || []);
+    setMessage("");
+  }catch(e){ showError("選項取得失敗，請確認 CORS 與 API 是否可用。詳見主控台。"); }
+}
+
+async function querySummary(metric){
+  try{
+    setMessage("查詢中…"); setResult(""); clearTable();
+    const p = currentParams(); p.set("view","summary"); p.set("metric", metric);
+    const data = await callAPI(p);
+    setResult((metric === "users" ? "人次：" : "冊次：") + (data.count ?? 0) + "（筆數：" + (data.matchedRows ?? 0) + "）");
+    setMessage("");
+  }catch(e){ showError(e); }
+}
+
+function renderTable(rows){
+  if (!rows?.length){ clearTable(); return; }
+  const cols = ["title","author","college","dept","reader","userId","loanDate","callno","copies"];
+  const thead = "<thead><tr>" + cols.map(c => "<th>" + c + "</th>").join("") + "</tr></thead>";
+  const tbody = "<tbody>" + rows.map(r =>
+    "<tr>" + cols.map(c => "<td>" + (r[c] ?? "") + "</td>").join("") + "</tr>"
+  ).join("") + "</tbody>";
+  tableWrap.innerHTML = "<table>" + thead + tbody + "</table>";
+}
+
+async function queryList(){
+  try{
+    setMessage("查詢中…"); setResult(""); clearTable();
+    const p = currentParams(); p.set("view","list"); p.set("limit","50"); p.set("offset","0");
+    const data = await callAPI(p);
+    setResult("符合筆數：" + (data.totalMatched ?? 0));
+    renderTable(data.rows || []);
+    setMessage("");
+  }catch(e){ showError(e); }
+}
+
+// 綁定事件
+el("btnSum").addEventListener("click", () => querySummary("copies"));
+el("btnUsers").addEventListener("click", () => querySummary("users"));
+el("btnList").addEventListener("click", () => queryList());
+
+// 聯動：任一選單改變就重載 options（保留可選值）
+selects.college.addEventListener("change", () => loadOptions());
+selects.dept.addEventListener("change", () => loadOptions());
+selects.reader.addEventListener("change", () => loadOptions());
+
+// 初始化
 loadOptions();
 </script>
