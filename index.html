@@ -108,11 +108,10 @@ async function querySummary(metric){
   }catch(e){ showError(e); }
 }
 
-// ---- Table rendering with Chinese headers and requested order ----
+// ---- Table rendering with Chinese headers and requested order (no barcode) ----
 const COLUMNS = [
   { key: "title",    label: "題名" },
   { key: "callno",   label: "索書號" },
-  { key: "barcode",  label: "條碼號" },         // 後端未提供則空白
   { key: "author",   label: "借閱者姓名" },
   { key: "college",  label: "學院" },
   { key: "dept",     label: "學系" },
@@ -138,7 +137,7 @@ async function queryList(){
     const p = currentParams(); p.set("view","list"); p.set("limit","500"); p.set("offset","0");
     const data = await callAPI(p);
     setResult("符合筆數：" + (data.totalMatched ?? 0));
-    renderTable((data.rows || []).map(r => ({ ...r, barcode: r.barcode || "" })));
+    renderTable(data.rows || []);
     setMessage("");
   }catch(e){ showError(e); }
 }
@@ -153,7 +152,7 @@ function downloadCsv(){
     if (!rowsCache.length){ setMessage("尚無清單，請先按『清單』查詢。"); return; }
     const header = COLUMNS.map(c => c.label).join(",");
     const lines = rowsCache.map(r => COLUMNS.map(c => toCsvValue(r[c.key] ?? "")).join(","));
-    const csv = "\ufeff" + [header].concat(lines).join("\r\n"); // BOM for Excel
+    const csv = "\ufeff" + [header].concat(lines).join("\r\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
