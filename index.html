@@ -7,7 +7,7 @@
   body { margin: 16px; }
   .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
   label { display: inline-flex; align-items: center; gap: 6px; }
-  select, button { padding: 6px 10px; }
+  select, button { padding: 6px 10px; min-width: 140px; }
   input[type="number"]{ width: 7em; padding: 6px; }
   button { cursor: pointer; }
   #status { color: #555; }
@@ -41,7 +41,7 @@
 
 <script>
 // ===== Config =====
-// 正式 API，可用 ?api= 覆蓋
+// 可用 ?api= 覆蓋
 const API = new URLSearchParams(location.search).get("api")
   || "https://sculib.app.n8n.cloud/webhook/borrow-stats";
 const CACHE_KEY = "borrowCache::" + API;
@@ -88,11 +88,37 @@ function fillSelect(sel, arr){
   sel.innerHTML = opts;
   if (cur && arr.includes(cur)) sel.value = cur;
 }
-function rebuildOptions(){
-  const uniq = a => Array.from(new Set(a.filter(Boolean))).sort();
-  fillSelect(selects.college, uniq(DATA.map(r => r.college)));
-  fillSelect(selects.dept,    uniq(DATA.map(r => r.dept)));
-  fillSelect(selects.reader,  uniq(DATA.map(r => r.reader)));
+function uniqList(arr){ return Array.from(new Set(arr.filter(Boolean))).sort(); }
+
+// 取下拉選單（優先打 API，失敗才用本地資料推算）
+async function loadOptionsFromAPI(){
+  try{
+    const url = API + "?view=options";
+    const res = await fetch(url, { mode: "cors" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    const colleges = (data?.options?.colleges || [])
+      .filter(x => String(x).toUpperCase() !== "NA")
+      .map(x => String(x).replace(/^NA\s*,\s*/i,"").trim())
+      .filter(Boolean);
+    const depts    = data?.options?.depts || [];
+    const readers  = data?.options?.readers || [];
+    if (colleges.length || depts.length || readers.length){
+      fillSelect(selects.college, uniqList(colleges));
+      fillSelect(selects.dept,    uniqList(depts));
+      fillSelect(selects.reader,  uniqList(readers));
+      return true;
+    }
+    return false;
+  }catch(e){
+    console.warn("options fetch failed:", e);
+    return false;
+  }
+}
+function rebuildOptionsFromDATA(){
+  fillSelect(selects.college, uniqList(DATA.map(r => r.college)));
+  fillSelect(selects.dept,    uniqList(DATA.map(r => r.dept)));
+  fillSelect(selects.reader,  uniqList(DATA.map(r => r.reader)));
 }
 
 // ==== API pagination fetch (view=list) ====
@@ -123,12 +149,16 @@ async function loadAll(){
   // Cache
   const payload = { ts: Date.now(), rows: DATA };
   localStorage.setItem(CACHE_KEY, JSON.stringify(payload));
-  rebuildOptions();
+
+  // 選單
+  const ok = await loadOptionsFromAPI();
+  if (!ok) rebuildOptionsFromDATA();
+
   setStatus(`已載入 ${DATA.length} 筆（已快取）`);
 }
 
 // ==== Cache load ====
-function tryLoadCache(){
+async function tryLoadCache(){
   const raw = localStorage.getItem(CACHE_KEY);
   if (!raw) return false;
   try{
@@ -136,10 +166,13 @@ function tryLoadCache(){
     if (!Array.isArray(rows)) return false;
     if (Date.now() - ts > CACHE_TTL_MS) return false;
     DATA = rows;
-    rebuildOptions();
+    const ok = await loadOptionsFromAPI();
+    if (!ok) rebuildOptionsFromDATA();
     setStatus(`已從快取載入 ${DATA.length} 筆（${new Date(ts).toLocaleString()}）`);
     return true;
-  }catch{ return false; }
+  }catch{
+    return false;
+  }
 }
 
 // ==== Filtering & outputs ====
@@ -217,7 +250,7 @@ document.getElementById("btnCsv").addEventListener("click", () => {
 });
 
 // 啟動：先嘗試載入快取
-if (!tryLoadCache()){
-  setStatus("尚未載入資料。請按『載入/更新資料』。");
-}
+tryLoadCache().then(ok => {
+  if (!ok) setStatus("尚未載入資料。請按『載入/更新資料』。");
+});
 </script>
