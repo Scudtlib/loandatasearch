@@ -1,0 +1,46 @@
+<!doctype html><meta charset="utf-8">
+<title>Borrow Query</title>
+<style>label{margin-right:8px} select,button{margin:4px}</style>
+<div>
+  <label>學院 <select id="college"></select></label>
+  <label>學系 <select id="dept"></select></label>
+  <label>讀者類型 <select id="reader"></select></label>
+  <button id="btnSum">查冊次</button>
+  <button id="btnUsers">查人次</button>
+  <button id="btnList">清單</button>
+</div>
+<pre id="out"></pre>
+<script>
+const API = "https://<你的n8n域名>/webhook[-test]/borrow-stats";
+
+const qs = () => {
+  const p = new URLSearchParams();
+  const v = id => document.getElementById(id).value;
+  if (v("college")) p.set("college", v("college"));
+  if (v("dept"))    p.set("dept", v("dept"));
+  if (v("reader"))  p.set("readerType", v("reader"));
+  return p;
+};
+
+async function loadOptions() {
+  const url = `${API}?view=options`;
+  const data = await fetch(url).then(r=>r.json());
+  const fill = (id, arr) => {
+    const sel = document.getElementById(id);
+    sel.innerHTML = `<option value=""></option>` + arr.map(x=>`<option>${x}</option>`).join("");
+  };
+  fill("college", data.options.colleges);
+  fill("dept",    data.options.depts);
+  fill("reader",  data.options.readers);
+}
+async function run(view, metric) {
+  const p = qs(); p.set("view", view); if (metric) p.set("metric", metric);
+  const url = `${API}?${p.toString()}`;
+  const data = await fetch(encodeURI(url)).then(r=>r.json());
+  out.textContent = JSON.stringify(data, null, 2);
+}
+document.getElementById("btnSum").onclick   = () => run("summary","copies");
+document.getElementById("btnUsers").onclick = () => run("summary","users");
+document.getElementById("btnList").onclick  = () => run("list");
+loadOptions();
+</script>
