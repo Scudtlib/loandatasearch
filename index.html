@@ -14,7 +14,6 @@
   table { border-collapse: collapse; width: 100%; margin-top: 12px; }
   th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; }
   th { background: #f5f5f5; }
-  pre { white-space: pre-wrap; word-break: break-word; background: #fafafa; border: 1px solid #eee; padding: 10px; }
 </style>
 
 <div class="row">
@@ -24,22 +23,23 @@
   <button id="btnSum">查冊次</button>
   <button id="btnUsers">查人次</button>
   <button id="btnList">清單</button>
+  <button id="btnCsv">匯出CSV</button>
 </div>
 
 <div id="msg"></div>
 <div id="result"></div>
 <div id="tableWrap"></div>
-<pre id="debug" style="display:none"></pre>
 
 <script>
 // ===== Config =====
-// 預設使用正式 API，可用 ?api=... 覆蓋
 const API = new URLSearchParams(location.search).get("api")
   || "https://sculib.app.n8n.cloud/webhook/borrow-stats";
 
 const el = id => document.getElementById(id);
 const selects = { college: el("college"), dept: el("dept"), reader: el("reader") };
 const msg = el("msg"), result = el("result"), tableWrap = el("tableWrap");
+
+let rowsCache = []; // for CSV export
 
 function setMessage(t){ msg.textContent = t || ""; }
 function setResult(t){ result.textContent = t || ""; }
@@ -108,12 +108,26 @@ async function querySummary(metric){
   }catch(e){ showError(e); }
 }
 
+// ---- Table rendering with Chinese headers and requested order ----
+const COLUMNS = [
+  { key: "title",    label: "題名" },
+  { key: "callno",   label: "索書號" },
+  { key: "barcode",  label: "條碼號" },         // 後端未提供則空白
+  { key: "author",   label: "借閱者姓名" },
+  { key: "college",  label: "學院" },
+  { key: "dept",     label: "學系" },
+  { key: "reader",   label: "類型" },
+  { key: "userId",   label: "學號/證號" },
+  { key: "loanDate", label: "借閱日期" },
+  { key: "copies",   label: "冊次" },
+];
+
 function renderTable(rows){
-  if (!rows?.length){ clearTable(); return; }
-  const cols = ["title","author","college","dept","reader","userId","loanDate","callno","copies"];
-  const thead = "<thead><tr>" + cols.map(c => "<th>" + c + "</th>").join("") + "</tr></thead>";
-  const tbody = "<tbody>" + rows.map(r =>
-    "<tr>" + cols.map(c => "<td>" + (r[c] ?? "") + "</td>").join("") + "</tr>"
+  rowsCache = rows || [];
+  if (!rowsCache.length){ clearTable(); return; }
+  const thead = "<thead><tr>" + COLUMNS.map(c => "<th>" + c.label + "</th>").join("") + "</tr></thead>";
+  const tbody = "<tbody>" + rowsCache.map(r =>
+    "<tr>" + COLUMNS.map(c => "<td>" + (r[c.key] ?? "") + "</td>").join("") + "</tr>"
   ).join("") + "</tbody>";
   tableWrap.innerHTML = "<table>" + thead + tbody + "</table>";
 }
@@ -121,17 +135,40 @@ function renderTable(rows){
 async function queryList(){
   try{
     setMessage("查詢中…"); setResult(""); clearTable();
-    const p = currentParams(); p.set("view","list"); p.set("limit","50"); p.set("offset","0");
+    const p = currentParams(); p.set("view","list"); p.set("limit","500"); p.set("offset","0");
     const data = await callAPI(p);
     setResult("符合筆數：" + (data.totalMatched ?? 0));
-    renderTable(data.rows || []);
+    renderTable((data.rows || []).map(r => ({ ...r, barcode: r.barcode || "" })));
     setMessage("");
+  }catch(e){ showError(e); }
+}
+
+// ---- CSV export ----
+function toCsvValue(v){
+  const s = (v == null ? "" : String(v)).replace(/"/g, '""');
+  return `"${s}"`;
+}
+function downloadCsv(){
+  try{
+    if (!rowsCache.length){ setMessage("尚無清單，請先按『清單』查詢。"); return; }
+    const header = COLUMNS.map(c => c.label).join(",");
+    const lines = rowsCache.map(r => COLUMNS.map(c => toCsvValue(r[c.key] ?? "")).join(","));
+    const csv = "\ufeff" + [header].concat(lines).join("\r\n"); // BOM for Excel
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "borrow-list.csv";
+    document.body.appendChild(a);
+    a.click();
+    URL.revokeObjectURL(a.href);
+    a.remove();
   }catch(e){ showError(e); }
 }
 
 document.getElementById("btnSum").addEventListener("click", () => querySummary("copies"));
 document.getElementById("btnUsers").addEventListener("click", () => querySummary("users"));
 document.getElementById("btnList").addEventListener("click", () => queryList());
+document.getElementById("btnCsv").addEventListener("click", () => downloadCsv());
 
 selects.college.addEventListener("change", () => loadOptions());
 selects.dept.addEventListener("change", () => loadOptions());
