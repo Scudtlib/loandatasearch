@@ -33,14 +33,13 @@
 
 <script>
 // ===== Config =====
-// 1) 建議改成你的 n8n Webhook URL，例如：
-//    const API = "https://sculib.app.n8n.cloud/webhook-test/borrow-stats";
-// 2) 也可透過網址參數覆蓋：?api=https://.../borrow-stats
-const API = new URLSearchParams(location.search).get("api") || "https://<你的n8n域名>/webhook[-test]/borrow-stats";
+// 預設使用正式 API，可用 ?api=... 覆蓋
+const API = new URLSearchParams(location.search).get("api")
+  || "https://sculib.app.n8n.cloud/webhook/borrow-stats";
 
 const el = id => document.getElementById(id);
 const selects = { college: el("college"), dept: el("dept"), reader: el("reader") };
-const msg = el("msg"), result = el("result"), tableWrap = el("tableWrap"), debug = el("debug");
+const msg = el("msg"), result = el("result"), tableWrap = el("tableWrap");
 
 function setMessage(t){ msg.textContent = t || ""; }
 function setResult(t){ result.textContent = t || ""; }
@@ -69,19 +68,32 @@ function fillSelect(sel, arr){
     .concat((arr || []).map(v => `<option>${v}</option>`))
     .join("");
   sel.innerHTML = opts;
-  // 若舊值仍存在，保留選取
   if (cur && arr && arr.includes(cur)) sel.value = cur;
 }
 
-async function loadOptions(cascade=true){
+// 移除 "NA" 或 "NA, " 前綴
+const cleanCollege = s => String(s || "").replace(/^NA\s*,\s*/i, "").trim();
+
+async function loadOptions(){
   try{
     setMessage("載入選項中…");
-    // 用目前已選的條件去拿 options 可做聯動
     const p = currentParams(); p.set("view", "options");
     const data = await callAPI(p);
-    fillSelect(selects.college, data?.options?.colleges || []);
-    fillSelect(selects.dept,    data?.options?.depts || []);
-    fillSelect(selects.reader,  data?.options?.readers || []);
+
+    const rawCol = (data?.options?.colleges || []);
+    const colleges = Array.from(new Set(
+      rawCol
+        .filter(x => String(x).toUpperCase() !== "NA")
+        .map(cleanCollege)
+        .filter(x => x !== "")
+    )).sort();
+
+    const depts   = (data?.options?.depts || []).filter(x => x !== "");
+    const readers = (data?.options?.readers || []).filter(x => x !== "");
+
+    fillSelect(selects.college, colleges);
+    fillSelect(selects.dept,    depts);
+    fillSelect(selects.reader,  readers);
     setMessage("");
   }catch(e){ showError("選項取得失敗，請確認 CORS 與 API 是否可用。詳見主控台。"); }
 }
@@ -117,16 +129,13 @@ async function queryList(){
   }catch(e){ showError(e); }
 }
 
-// 綁定事件
-el("btnSum").addEventListener("click", () => querySummary("copies"));
-el("btnUsers").addEventListener("click", () => querySummary("users"));
-el("btnList").addEventListener("click", () => queryList());
+document.getElementById("btnSum").addEventListener("click", () => querySummary("copies"));
+document.getElementById("btnUsers").addEventListener("click", () => querySummary("users"));
+document.getElementById("btnList").addEventListener("click", () => queryList());
 
-// 聯動：任一選單改變就重載 options（保留可選值）
 selects.college.addEventListener("change", () => loadOptions());
 selects.dept.addEventListener("change", () => loadOptions());
 selects.reader.addEventListener("change", () => loadOptions());
 
-// 初始化
 loadOptions();
 </script>
