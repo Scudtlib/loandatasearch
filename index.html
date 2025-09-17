@@ -106,8 +106,8 @@ async function loadAll(){
   const {rows=[]} = await res.json();
   DATA = rows;
   localStorage.setItem(CACHE_KEY, JSON.stringify({ts:Date.now(), rows:DATA}));
-  const ok = await loadOptionsFromAPI();
-  if(!ok) rebuildOptionsFromDATA();
+  const ok = await loadOptionsFromAPI();  // 先用 API 選單
+  if(!ok) rebuildOptionsFromDATA();       // 失敗才用本地資料推算
   setStatus(`已載入 ${DATA.length} 筆（已快取）`);
 }
 
