@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>借閱查詢（快取一次 → 本地篩選）</title>
+<title>借閱查詢（一次載入→本地篩選）</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans","Helvetica Neue",Arial}
@@ -20,6 +20,7 @@
 
 <div class="row">
   <button id="btnLoad">載入/更新資料</button>
+  <button id="btnClear">清除快取</button>
   <span id="status"></span>
 </div>
 
@@ -39,7 +40,7 @@
 
 <script>
 const API = new URLSearchParams(location.search).get("api")
-  || "https://sculib.app.n8n.cloud/webhook/borrow-stats";
+  || "https://sculib.app.n8n.cloud/webhook/borrow-stats"; // 後端 view=list 一次回全部
 const CACHE_KEY = "borrowCache::" + API;
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -81,24 +82,24 @@ function fillSelect(sel,arr){
   if(cur&&arr.includes(cur)) sel.value=cur;
 }
 
-async function loadOptionsFromAPI(){
+async function loadOptions(){
+  // 先用 API options，失敗才用本地推算；保留 NA
   try{
-    const res=await fetch(API+"?view=options",{mode:"cors"});
-    if(!res.ok) throw new Error("HTTP "+res.status);
-    const d=await res.json();
-    fillSelect(selects.college, uniq((d?.options?.colleges)||[])); // 保留 NA
+    const r=await fetch(API+"?view=options",{mode:"cors"});
+    if(!r.ok) throw 0;
+    const d=await r.json();
+    fillSelect(selects.college, uniq((d?.options?.colleges)||[]));
     fillSelect(selects.dept,    uniq((d?.options?.depts)||[]));
     fillSelect(selects.reader,  uniq((d?.options?.readers)||[]));
-    return true;
-  }catch{ return false; }
-}
-function rebuildOptionsFromDATA(){
-  fillSelect(selects.college, uniq(DATA.map(r=>r.college)));
-  fillSelect(selects.dept,    uniq(DATA.map(r=>r.dept)));
-  fillSelect(selects.reader,  uniq(DATA.map(r=>r.reader)));
+    return;
+  }catch{
+    fillSelect(selects.college, uniq(DATA.map(r=>r.college)));
+    fillSelect(selects.dept,    uniq(DATA.map(r=>r.dept)));
+    fillSelect(selects.reader,  uniq(DATA.map(r=>r.reader)));
+  }
 }
 
-// 單次抓全量
+// 單次抓全量（後端需保證 view=list 回全部 rows）
 async function loadAll(){
   setStatus("下載資料中…");
   const res = await fetch(API+"?view=list", {mode:"cors"});
@@ -106,8 +107,7 @@ async function loadAll(){
   const {rows=[]} = await res.json();
   DATA = rows;
   localStorage.setItem(CACHE_KEY, JSON.stringify({ts:Date.now(), rows:DATA}));
-  const ok = await loadOptionsFromAPI();  // 先用 API 選單
-  if(!ok) rebuildOptionsFromDATA();       // 失敗才用本地資料推算
+  await loadOptions();
   setStatus(`已載入 ${DATA.length} 筆（已快取）`);
 }
 
@@ -119,8 +119,7 @@ async function tryLoadCache(){
     if(!Array.isArray(rows)) return false;
     if(Date.now()-ts> CACHE_TTL_MS) return false;
     DATA=rows;
-    const ok=await loadOptionsFromAPI();
-    if(!ok) rebuildOptionsFromDATA();
+    await loadOptions();
     setStatus(`已從快取載入 ${DATA.length} 筆（${new Date(ts).toLocaleString()}）`);
     return true;
   }catch{return false;}
@@ -147,7 +146,14 @@ function toCsv(rows){
 }
 
 // 綁定
-document.getElementById("btnLoad").onclick=async()=>{setResult("");clearTable();try{await loadAll();}catch(e){setStatus("下載失敗："+e.message);}};
+document.getElementById("btnLoad").onclick=async()=>{
+  setResult("");clearTable();
+  try{await loadAll();}catch(e){setStatus("下載失敗："+e.message);}
+};
+document.getElementById("btnClear").onclick=()=>{
+  localStorage.removeItem(CACHE_KEY);
+  setStatus("已清除快取，請重新『載入/更新資料』。");
+};
 document.getElementById("btnReset").onclick=()=>{selects.college.value="";selects.dept.value="";selects.reader.value="";setResult("");clearTable();};
 document.getElementById("btnSum").onclick=()=>{VIEW=buildFiltered();const total=VIEW.reduce((a,r)=>a+(Number(r.copies)||0),0);renderTable([]);setResult(`冊次：${total}（筆數：${VIEW.length}）`);};
 document.getElementById("btnUsers").onclick=()=>{VIEW=buildFiltered();const ids=new Set(VIEW.map(r=>S(r.userId)).filter(Boolean));renderTable([]);setResult(`人次：${ids.size}（筆數：${VIEW.length}）`);};
