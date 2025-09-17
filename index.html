@@ -1,27 +1,25 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>Borrow Query — Cache First</title>
+<title>借閱查詢（快取一次 → 本地篩選）</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  :root { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial; }
-  body { margin: 16px; }
-  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
-  label { display: inline-flex; align-items: center; gap: 6px; }
-  select, button { padding: 6px 10px; min-width: 140px; }
-  input[type="number"]{ width: 7em; padding: 6px; }
-  button { cursor: pointer; }
-  #status { color: #555; }
-  #result { margin-top: 10px; font-weight: 600; }
-  table { border-collapse: collapse; width: 100%; margin-top: 12px; }
-  th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; }
-  th { background: #f5f5f5; }
+  :root{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans","Helvetica Neue",Arial}
+  body{margin:16px}
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
+  label{display:inline-flex;align-items:center;gap:6px}
+  select,button{padding:6px 10px;min-width:140px}
+  button{cursor:pointer}
+  #status{color:#555}
+  #result{margin-top:10px;font-weight:600}
+  table{border-collapse:collapse;width:100%;margin-top:12px}
+  th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}
+  th{background:#f5f5f5}
 </style>
 
 <h3>借閱查詢（先載入一次資料→後續本地篩選）</h3>
 
 <div class="row">
   <button id="btnLoad">載入/更新資料</button>
-  <label>每頁抓取 <input type="number" id="pageSize" min="100" max="5000" step="100" value="1000"> 筆</label>
   <span id="status"></span>
 </div>
 
@@ -40,12 +38,10 @@
 <div id="tableWrap"></div>
 
 <script>
-// ===== Config =====
-// 可用 ?api= 覆蓋
 const API = new URLSearchParams(location.search).get("api")
   || "https://sculib.app.n8n.cloud/webhook/borrow-stats";
 const CACHE_KEY = "borrowCache::" + API;
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 小時
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
 const selects = {
   college: document.getElementById("college"),
@@ -55,202 +51,109 @@ const selects = {
 const statusEl = document.getElementById("status");
 const resultEl = document.getElementById("result");
 const tableWrap = document.getElementById("tableWrap");
-const pageSizeInput = document.getElementById("pageSize");
 
-let DATA = [];   // 全量資料
-let VIEW = [];   // 篩選結果
+let DATA = [], VIEW = [];
 
-// 欄位與中文標題（無條碼欄）
 const COLS = [
-  { key: "title",    label: "題名" },
-  { key: "callno",   label: "索書號" },
-  { key: "author",   label: "借閱者姓名" },
-  { key: "college",  label: "學院" },
-  { key: "dept",     label: "學系" },
-  { key: "reader",   label: "類型" },
-  { key: "userId",   label: "學號/證號" },
-  { key: "loanDate", label: "借閱日期" },
-  { key: "copies",   label: "冊次" },
+  { key:"title",    label:"題名" },
+  { key:"callno",   label:"索書號" },
+  { key:"author",   label:"借閱者姓名" },
+  { key:"college",  label:"學院" },
+  { key:"dept",     label:"學系" },
+  { key:"reader",   label:"類型" },
+  { key:"userId",   label:"學號/證號" },
+  { key:"loanDate", label:"借閱日期" },
+  { key:"copies",   label:"冊次" },
 ];
 
-// ==== Helpers ====
-const S = v => v == null ? "" : String(v);
-const unify = s => S(s).replace(/\u3000/g," ").replace(/\u00A0/g," ").trim();
-const norm  = s => unify(s).replace(/\s+/g,"");
-const matchInc = (qv, dv) => !qv || norm(dv).includes(norm(qv));
+const S=v=>v==null?"":String(v);
+const unify=s=>S(s).replace(/\u3000/g," ").replace(/\u00A0/g," ").trim();
+const norm=s=>unify(s).replace(/\s+/g,"");
+const matchInc=(qv,dv)=>!qv||norm(dv).includes(norm(qv));
+const uniq=a=>Array.from(new Set(a.filter(Boolean))).sort();
 
-function setStatus(t){ statusEl.textContent = t || ""; }
-function setResult(t){ resultEl.textContent = t || ""; }
-function clearTable(){ tableWrap.innerHTML = ""; }
-function fillSelect(sel, arr){
-  const cur = sel.value;
-  const opts = ['<option value=""></option>'].concat(arr.map(x=>`<option>${x}</option>`)).join("");
-  sel.innerHTML = opts;
-  if (cur && arr.includes(cur)) sel.value = cur;
+function setStatus(t){statusEl.textContent=t||""}
+function setResult(t){resultEl.textContent=t||""}
+function clearTable(){tableWrap.innerHTML=""}
+function fillSelect(sel,arr){
+  const cur=sel.value;
+  sel.innerHTML=['<option value=""></option>'].concat(arr.map(x=>`<option>${x}</option>`)).join("");
+  if(cur&&arr.includes(cur)) sel.value=cur;
 }
-function uniqList(arr){ return Array.from(new Set(arr.filter(Boolean))).sort(); }
 
-// 取下拉選單（優先打 API，失敗才用本地資料推算）
 async function loadOptionsFromAPI(){
   try{
-    const url = API + "?view=options";
-    const res = await fetch(url, { mode: "cors" });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
-    const colleges = (data?.options?.colleges || [])
-      .filter(x => String(x).toUpperCase() !== "NA")
-      .map(x => String(x).replace(/^NA\s*,\s*/i,"").trim())
-      .filter(Boolean);
-    const depts    = data?.options?.depts || [];
-    const readers  = data?.options?.readers || [];
-    if (colleges.length || depts.length || readers.length){
-      fillSelect(selects.college, uniqList(colleges));
-      fillSelect(selects.dept,    uniqList(depts));
-      fillSelect(selects.reader,  uniqList(readers));
-      return true;
-    }
-    return false;
-  }catch(e){
-    console.warn("options fetch failed:", e);
-    return false;
-  }
+    const res=await fetch(API+"?view=options",{mode:"cors"});
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    const d=await res.json();
+    fillSelect(selects.college, uniq((d?.options?.colleges)||[])); // 保留 NA
+    fillSelect(selects.dept,    uniq((d?.options?.depts)||[]));
+    fillSelect(selects.reader,  uniq((d?.options?.readers)||[]));
+    return true;
+  }catch{ return false; }
 }
 function rebuildOptionsFromDATA(){
-  fillSelect(selects.college, uniqList(DATA.map(r => r.college)));
-  fillSelect(selects.dept,    uniqList(DATA.map(r => r.dept)));
-  fillSelect(selects.reader,  uniqList(DATA.map(r => r.reader)));
+  fillSelect(selects.college, uniq(DATA.map(r=>r.college)));
+  fillSelect(selects.dept,    uniq(DATA.map(r=>r.dept)));
+  fillSelect(selects.reader,  uniq(DATA.map(r=>r.reader)));
 }
 
-// ==== API pagination fetch (view=list) ====
-async function fetchPage(offset, limit){
-  const p = new URLSearchParams();
-  p.set("view","list");
-  p.set("offset", String(offset));
-  p.set("limit",  String(limit));
-  const url = API + "?" + p.toString();
-  const res = await fetch(url, { mode: "cors" });
-  if (!res.ok) throw new Error("HTTP " + res.status);
-  return res.json();
-}
-
+// 單次抓全量
 async function loadAll(){
   setStatus("下載資料中…");
-  DATA = [];
-  const pageSize = Math.max(100, Math.min(5000, Number(pageSizeInput.value) || 1000));
-  let offset = 0;
-  for (;;){
-    const chunk = await fetchPage(offset, pageSize);
-    const rows = chunk.rows || [];
-    DATA.push(...rows);
-    setStatus(`下載中：${DATA.length} 筆…`);
-    if (rows.length < pageSize) break;
-    offset += pageSize;
-  }
-  // Cache
-  const payload = { ts: Date.now(), rows: DATA };
-  localStorage.setItem(CACHE_KEY, JSON.stringify(payload));
-
-  // 選單
+  const res = await fetch(API+"?view=list", {mode:"cors"});
+  if(!res.ok) throw new Error("HTTP "+res.status);
+  const {rows=[]} = await res.json();
+  DATA = rows;
+  localStorage.setItem(CACHE_KEY, JSON.stringify({ts:Date.now(), rows:DATA}));
   const ok = await loadOptionsFromAPI();
-  if (!ok) rebuildOptionsFromDATA();
-
+  if(!ok) rebuildOptionsFromDATA();
   setStatus(`已載入 ${DATA.length} 筆（已快取）`);
 }
 
-// ==== Cache load ====
 async function tryLoadCache(){
-  const raw = localStorage.getItem(CACHE_KEY);
-  if (!raw) return false;
+  const raw=localStorage.getItem(CACHE_KEY);
+  if(!raw) return false;
   try{
-    const { ts, rows } = JSON.parse(raw);
-    if (!Array.isArray(rows)) return false;
-    if (Date.now() - ts > CACHE_TTL_MS) return false;
-    DATA = rows;
-    const ok = await loadOptionsFromAPI();
-    if (!ok) rebuildOptionsFromDATA();
+    const {ts,rows}=JSON.parse(raw);
+    if(!Array.isArray(rows)) return false;
+    if(Date.now()-ts> CACHE_TTL_MS) return false;
+    DATA=rows;
+    const ok=await loadOptionsFromAPI();
+    if(!ok) rebuildOptionsFromDATA();
     setStatus(`已從快取載入 ${DATA.length} 筆（${new Date(ts).toLocaleString()}）`);
     return true;
-  }catch{
-    return false;
-  }
+  }catch{return false;}
 }
 
-// ==== Filtering & outputs ====
 function buildFiltered(){
-  const qc = selects.college.value;
-  const qd = selects.dept.value;
-  const qr = selects.reader.value;
   return DATA.filter(r =>
-    matchInc(qc, r.college) &&
-    matchInc(qd, r.dept) &&
-    matchInc(qr, r.reader)
+    matchInc(selects.college.value, r.college) &&
+    matchInc(selects.dept.value,    r.dept) &&
+    matchInc(selects.reader.value,  r.reader)
   );
 }
-
 function renderTable(rows){
-  if (!rows.length){ clearTable(); return; }
-  const thead = "<thead><tr>" + COLS.map(c => "<th>"+c.label+"</th>").join("") + "</tr></thead>";
-  const tbody = "<tbody>" + rows.map(r =>
-    "<tr>" + COLS.map(c => "<td>"+ S(r[c.key]) +"</td>").join("") + "</tr>"
-  ).join("") + "</tbody>";
-  tableWrap.innerHTML = "<table>" + thead + tbody + "</table>";
+  if(!rows.length){clearTable();return;}
+  const thead="<thead><tr>"+COLS.map(c=>"<th>"+c.label+"</th>").join("")+"</tr></thead>";
+  const tbody="<tbody>"+rows.map(r=>"<tr>"+COLS.map(c=>"<td>"+S(r[c.key])+"</td>").join("")+"</tr>").join("")+"</tbody>";
+  tableWrap.innerHTML="<table>"+thead+tbody+"</table>";
 }
-
 function toCsv(rows){
-  const header = COLS.map(c => c.label).join(",");
-  const esc = v => `"${S(v).replace(/"/g,'""')}"`;
-  const lines = rows.map(r => COLS.map(c => esc(r[c.key])).join(","));
-  return "\ufeff" + [header].concat(lines).join("\r\n");
+  const header=COLS.map(c=>c.label).join(",");
+  const esc=v=>`"${S(v).replace(/"/g,'""')}"`;
+  const lines=rows.map(r=>COLS.map(c=>esc(r[c.key])).join(","));
+  return "\ufeff"+[header].concat(lines).join("\r\n");
 }
 
-// ==== UI bindings ====
-document.getElementById("btnLoad").addEventListener("click", async () => {
-  setResult(""); clearTable();
-  try { await loadAll(); } catch(e){ setStatus("下載失敗：" + e.message); }
-});
+// 綁定
+document.getElementById("btnLoad").onclick=async()=>{setResult("");clearTable();try{await loadAll();}catch(e){setStatus("下載失敗："+e.message);}};
+document.getElementById("btnReset").onclick=()=>{selects.college.value="";selects.dept.value="";selects.reader.value="";setResult("");clearTable();};
+document.getElementById("btnSum").onclick=()=>{VIEW=buildFiltered();const total=VIEW.reduce((a,r)=>a+(Number(r.copies)||0),0);renderTable([]);setResult(`冊次：${total}（筆數：${VIEW.length}）`);};
+document.getElementById("btnUsers").onclick=()=>{VIEW=buildFiltered();const ids=new Set(VIEW.map(r=>S(r.userId)).filter(Boolean));renderTable([]);setResult(`人次：${ids.size}（筆數：${VIEW.length}）`);};
+document.getElementById("btnList").onclick=()=>{VIEW=buildFiltered();renderTable(VIEW);setResult(`符合筆數：${VIEW.length}`);};
+document.getElementById("btnCsv").onclick=()=>{if(!VIEW.length){setStatus("請先按『清單』查詢。");return;}const csv=toCsv(VIEW);const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="borrow-list.csv";document.body.appendChild(a);a.click();URL.revokeObjectURL(a.href);a.remove();};
 
-document.getElementById("btnReset").addEventListener("click", () => {
-  selects.college.value = "";
-  selects.dept.value = "";
-  selects.reader.value = "";
-  setResult(""); clearTable();
-});
-
-document.getElementById("btnSum").addEventListener("click", () => {
-  VIEW = buildFiltered();
-  const total = VIEW.reduce((a,r) => a + (Number(r.copies)||0), 0);
-  renderTable([]);
-  setResult(`冊次：${total}（筆數：${VIEW.length}）`);
-});
-
-document.getElementById("btnUsers").addEventListener("click", () => {
-  VIEW = buildFiltered();
-  const ids = new Set(VIEW.map(r => S(r.userId)).filter(Boolean));
-  renderTable([]);
-  setResult(`人次：${ids.size}（筆數：${VIEW.length}）`);
-});
-
-document.getElementById("btnList").addEventListener("click", () => {
-  VIEW = buildFiltered();
-  renderTable(VIEW);
-  setResult(`符合筆數：${VIEW.length}`);
-});
-
-document.getElementById("btnCsv").addEventListener("click", () => {
-  if (!VIEW.length){ setStatus("請先按『清單』查詢。"); return; }
-  const csv = toCsv(VIEW);
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "borrow-list.csv";
-  document.body.appendChild(a);
-  a.click();
-  URL.revokeObjectURL(a.href);
-  a.remove();
-});
-
-// 啟動：先嘗試載入快取
-tryLoadCache().then(ok => {
-  if (!ok) setStatus("尚未載入資料。請按『載入/更新資料』。");
-});
+// 啟動
+tryLoadCache().then(ok=>{if(!ok) setStatus("尚未載入資料。請按『載入/更新資料』。");});
 </script>
